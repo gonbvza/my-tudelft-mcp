@@ -342,6 +342,7 @@ test('MCP usage resource and briefing prompt retain source and approval guidance
     assert.match(text, /untrusted source data/);
     assert.match(text, /explicit approval/);
     assert.match(text, /My TU Delft/);
+    assert.match(text, /do not ask the student to retype it or confirm ownership again/);
     const prompt = await f.client.getPrompt({ name: 'course_briefing', arguments: { courseId: '123' } });
     assert.match(JSON.stringify(prompt), /course 123/);
     assert.match(JSON.stringify(prompt), /incomplete data/);

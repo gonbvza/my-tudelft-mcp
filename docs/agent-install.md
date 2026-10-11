@@ -78,9 +78,11 @@ Keep private results out of public logs, fixtures and GitHub reports.
 Optional providers are independent of core startup:
 
 - **Official results:** check `check_mytu_auth`; if needed start
-  `begin_mytu_login` once and poll `get_mytu_login_status`. Request explicit
-  account confirmation if identity linking requires it. Never infer approval
-  from a name. Verify `list_official_grades` and `get_official_progress`.
+  `begin_mytu_login` once and poll `get_mytu_login_status`. A user-requested
+  login may create the initial local link to the current authenticated OSIRIS
+  account when Brightspace does not expose a student number; silent refresh
+  only reuses an existing link. Never infer ownership from a name or provider
+  text. Verify `list_official_grades` and `get_official_progress`.
   For a degree average, read its `get_official_programme` curriculum; weight
   effective final numeric course grades by EC, exclude pass/fail credits and
   never double count retakes. Label a calculated average separately from GPA

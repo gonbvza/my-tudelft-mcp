@@ -300,7 +300,9 @@ export class MyTuDelft {
       if (!confirmedStudentHash && !expected.studentNumbers.length) {
         if (previous?.version === 1 && previous.brightspaceOrigin === this.auth.config.baseUrl
           && previous.providerOrigin === ORIGIN && previous.accountId === expected.accountId
-          && previous.identityMethod === 'student_confirmed_link' && /^[a-f0-9]{64}$/.test(previous.studentHash)) {
+          && (previous.identityMethod === 'student_confirmed_link' || !silent
+            && ['institutional_student_number', 'institutional_email'].includes(previous.identityMethod))
+          && /^[a-f0-9]{64}$/.test(previous.studentHash)) {
           confirmedStudentHash = previous.studentHash;
         }
         if (await vault.fingerprint() !== fingerprint) throw new BrightspaceError('MYTU_SESSION_CHANGED', 'The saved My TU Delft account link changed. Start sign-in again.');
@@ -371,7 +373,9 @@ export class MyTuDelft {
           if (!candidate) return undefined;
           const token = candidate;
           const stillOpen = async (): Promise<void> => { await current(); if (page.isClosed()) throw new BrightspaceError(cancelled.code, cancelled.message); };
-          const verified = await this.providerIdentity(expected, token.accessToken, stillOpen, confirmedStudentHash);
+          // A user-requested first login may link the authenticated student.
+          // Silent renewal and existing vaults must retain their original identity.
+          const verified = await this.providerIdentity(expected, token.accessToken, stillOpen, confirmedStudentHash, !silent && !previous);
           await stillOpen();
           const storage = await context.storageState();
           await stillOpen();
@@ -385,7 +389,7 @@ export class MyTuDelft {
           });
           await stillOpen(); this.failedRenewal = undefined;
           this.loginState = { state: 'connected', identityMethod: verified.method, message: verified.method === 'student_confirmed_link'
-            ? 'My TU Delft is connected to the exact student account you explicitly linked to this Brightspace account.' : verified.method === 'institutional_student_number'
+            ? 'My TU Delft is connected to your signed-in student account. The account link is saved for future connections.' : verified.method === 'institutional_student_number'
             ? 'My TU Delft is connected and matched to your Brightspace student number.'
             : 'My TU Delft is connected and matched to your Brightspace institutional email address.' };
           return true;
@@ -417,7 +421,7 @@ export class MyTuDelft {
       catch { throw new BrightspaceError('MYTU_FORMAT_CHANGED', 'The student results JSON could not be read.'); }
     } finally { if (!response.body?.locked) await response.body?.cancel().catch(() => undefined); }
   }
-  private async providerIdentity(expected: MyTuIdentity, token: string, current: () => Promise<void>, confirmedStudentHash?: string): Promise<VerifiedIdentity> {
+  private async providerIdentity(expected: MyTuIdentity, token: string, current: () => Promise<void>, confirmedStudentHash?: string, linkCurrentAccount = false): Promise<VerifiedIdentity> {
     const user = record(await this.api('/gebruiker', token)); await current();
     // Explicit linking is available when Brightspace cannot expose its student number.
     // It never overrides a conflicting institutional student-number comparison.
@@ -430,6 +434,17 @@ export class MyTuDelft {
     // Do not read contact details when a student-number comparison settles the match,
     // or when the email/student prerequisites already prove that the fallback cannot work.
     const expectedEmail = institutionalEmail(expected.institutionalEmail), accountEmail = institutionalEmail(user.e_mailadres);
+    if (!expected.studentNumbers.length && linkCurrentAccount && (!expectedEmail || !accountEmail || expectedEmail !== accountEmail)) {
+      const student = number(user.studentnummer);
+      if (user.toegang_applicatie !== 'J') throw new BrightspaceError('MYTU_PERMISSION_DENIED', 'This account does not have access to the student application.');
+      if (!student) throw new BrightspaceError('MYTU_IDENTITY_UNVERIFIED', 'My TU Delft did not return a valid student number. The account link has not been saved.');
+      const studentHash = digest(student);
+      // Re-read the authenticated identity before pinning it; never store the raw number.
+      const after = record(await this.api('/gebruiker', token)); await current();
+      if (after.toegang_applicatie !== 'J') throw new BrightspaceError('MYTU_PERMISSION_DENIED', 'This account does not have access to the student application.');
+      if (number(after.studentnummer) !== student) throw new BrightspaceError('MYTU_ACCOUNT_MISMATCH', 'The My TU Delft student identity changed during verification.');
+      return { studentHash, method: 'student_confirmed_link' };
+    }
     if (expected.studentNumbers.length || !number(user.studentnummer) || !expectedEmail || !accountEmail
       || expectedEmail !== accountEmail || user.toegang_applicatie !== undefined && user.toegang_applicatie !== 'J') {
       return matchMyTuIdentity(expected, user);

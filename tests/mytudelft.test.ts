@@ -348,6 +348,76 @@ test('silent renewal never persists a different account or runs after explicit l
   assert.equal(state.launchCount, 1);
 });
 
+test('requested login links the authenticated account across email aliases without retyping a number', async () => {
+  const { reader, state } = fixture(); state.provider = null; state.studentNumber = undefined;
+  state.uniqueName = 'synthetic-netid@tudelft.nl'; state.user.e_mailadres = 'different.alias@student.tudelft.nl';
+  await reader.beginLogin(); await finished(reader);
+  assert.equal(reader.status().state, 'connected');
+  assert.equal(reader.status().identityMethod, 'student_confirmed_link');
+  assert.equal(state.saved[0].studentHash, hash('1234567'));
+  assert.equal(JSON.stringify(state.saved).includes('1234567'), false);
+  assert.equal((await reader.checkAuth()).accountVerified, true);
+  state.provider.expiresAt = 1; state.browserClosed = 0;
+  assert.equal((await reader.checkAuth()).accountVerified, true);
+  assert.equal(state.launchOptions.headless, true);
+  state.user.studentnummer = 7654321;
+  await assert.rejects(reader.grades(), { code: 'MYTU_ACCOUNT_MISMATCH' });
+  await reader.close();
+});
+
+test('silent login cannot create a new link across email aliases', async () => {
+  const { reader, state } = fixture(); state.provider = null; state.studentNumber = undefined;
+  state.uniqueName = 'synthetic-netid@tudelft.nl'; state.user.e_mailadres = 'different.alias@student.tudelft.nl';
+  await reader.beginLogin({ silent: true }); await finished(reader);
+  assert.equal(reader.status().state, 'failed'); assert.equal(state.saved.length, 0);
+  await reader.close();
+});
+
+test('requested login cannot replace a pinned student even when Brightspace hides its number', async () => {
+  const { reader, state } = fixture(); state.studentNumber = undefined;
+  state.uniqueName = 'synthetic-netid@tudelft.nl'; state.user.e_mailadres = 'different.alias@student.tudelft.nl';
+  state.user.studentnummer = 7654321;
+  await reader.beginLogin(); await finished(reader);
+  assert.equal(reader.status().error?.code, 'MYTU_ACCOUNT_MISMATCH');
+  assert.equal(state.saved.length, 0);
+  await reader.close();
+});
+
+test('new account linking rejects a provider identity change between its two checks', async () => {
+  const { reader, state } = fixture(); state.provider = null; state.studentNumber = undefined;
+  state.uniqueName = 'synthetic-netid@tudelft.nl'; state.user.e_mailadres = 'different.alias@student.tudelft.nl';
+  let checks = 0;
+  state.afterIdentity = () => { if (++checks === 2) state.user.studentnummer = 7654321; };
+  await reader.beginLogin(); await finished(reader);
+  assert.equal(checks, 2);
+  assert.equal(reader.status().error?.code, 'MYTU_ACCOUNT_MISMATCH');
+  assert.equal(state.saved.length, 0);
+  await reader.close();
+});
+
+test('new account linking rejects a Brightspace account change before saving', async () => {
+  const { reader, state } = fixture(); state.provider = null; state.studentNumber = undefined;
+  state.uniqueName = 'synthetic-netid@tudelft.nl'; state.user.e_mailadres = 'different.alias@student.tudelft.nl';
+  state.afterIdentity = () => { state.accountId = '99'; };
+  await reader.beginLogin(); await finished(reader);
+  assert.equal(reader.status().error?.code, 'ACCOUNT_CHANGED');
+  assert.equal(state.saved.length, 0);
+  await reader.close();
+});
+
+test('new account linking requires a valid student number and student application access', async () => {
+  const { reader, state } = fixture(); state.provider = null; state.studentNumber = undefined;
+  state.uniqueName = 'synthetic-netid@tudelft.nl'; state.user.e_mailadres = 'different.alias@student.tudelft.nl';
+  state.user.studentnummer = undefined;
+  await reader.beginLogin(); await finished(reader);
+  assert.equal(reader.status().error?.code, 'MYTU_IDENTITY_UNVERIFIED');
+  state.user.studentnummer = 1234567; state.user.toegang_applicatie = 'N'; state.browserClosed = 0;
+  await reader.beginLogin(); await finished(reader);
+  assert.equal(reader.status().error?.code, 'MYTU_PERMISSION_DENIED');
+  assert.equal(state.saved.length, 0);
+  await reader.close();
+});
+
 test('explicit student-confirmed linking supports email aliases without bypassing account changes', async () => {
   const { reader, state } = fixture(); state.studentNumber = undefined; state.uniqueName = 'synthetic-netid@tudelft.nl';
   state.user.e_mailadres = 'different.alias@student.tudelft.nl';
