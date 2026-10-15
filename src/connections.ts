@@ -43,10 +43,13 @@ export interface ConnectionChecks {
   recordings: () => Row;
   /** Optional Microsoft university email, for this process only. */
   mail: () => Promise<Row>;
+  /** Optional WebLab programming-exercise site; silent saved-session check. */
+  weblab?: () => Promise<Row>;
 }
 
 const SIGN_IN_CODES = new Set(['AUTH_REQUIRED', 'MYTU_AUTH_REQUIRED', 'TIMETABLE_AUTH_REQUIRED', 'RECORDING_AUTH_REQUIRED',
-  'LOGIN_TIMEOUT', 'LOGIN_CANCELLED', 'MYTU_LOGIN_TIMEOUT', 'TIMETABLE_LOGIN_TIMEOUT']);
+  'LOGIN_TIMEOUT', 'LOGIN_CANCELLED', 'MYTU_LOGIN_TIMEOUT', 'TIMETABLE_LOGIN_TIMEOUT',
+  'WEBLAB_AUTH_REQUIRED', 'WEBLAB_LOGIN_TIMEOUT', 'WEBLAB_LOGIN_CANCELLED']);
 
 /** What the student should do next, keyed by the sanitized error code. */
 function nextStepFor(service: string, code: string): string {
@@ -57,6 +60,7 @@ function nextStepFor(service: string, code: string): string {
   if (service === 'brightspace') return 'Run `npm run login`. In an MCP client, begin_login needs interactive:true and the student’s explicit request.';
   if (service === 'mytu') return 'Run `npm run login -- --only mytu`, or begin_mytu_login when the student asks.';
   if (service === 'timetable') return 'Run `npm run login -- --only timetable`, or connect_timetable_from_browser when the student asks.';
+  if (service === 'weblab') return 'Optional. Start weblab_begin_login when the student asks; later reads renew silently.';
   if (service === 'recordings') return 'Recordings sign in per course topic: begin_recording_login when the student asks.';
   return 'Sign in to this service when the student asks.';
 }
@@ -125,6 +129,16 @@ export async function connectionOverview(checks: ConnectionChecks, origin: strin
         : 'Recording access is per course topic and is verified only when read_recording runs.',
       nextStep: 'Call read_recording for an exact course topic; it renews a saved session silently.',
       detail: { loginState: recordings.state } });
+
+    if (checks.weblab) {
+      try {
+        await checks.weblab();
+        services.push({ service: 'weblab', label: 'WebLab', required: false, partOfLogin: false, state: 'connected',
+          message: 'Connected and matched to this Brightspace NetID.', detail: { accountVerified: true } });
+      } catch (error) {
+        services.push(failure('weblab', 'WebLab', false, error, 'Optional. No verified WebLab connection for this account.'));
+      }
+    }
   }
 
   try {

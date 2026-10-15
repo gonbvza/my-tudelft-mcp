@@ -82,7 +82,11 @@ test('MCP exposes student tools with schemas and accurate write annotations', as
   const f = await fixture();
   try {
     const { tools } = await f.client.listTools();
-    assert.equal(tools.length, 86);
+    assert.equal(tools.length, 95);
+    for (const name of ['weblab_check_auth', 'weblab_list_courses', 'weblab_get_course', 'weblab_get_assignment', 'weblab_read_my_submission']) {
+      assert.equal(tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint, true, name);
+    }
+    assert.ok(tools.find((tool) => tool.name === 'weblab_begin_login')?.inputSchema.required?.includes('interactive'));
     assert.equal(new Set(tools.map((tool) => tool.name)).size, tools.length);
     for (const name of ['list_recordings', 'read_course_service', 'list_available_groups', 'prepare_group_enrollment', 'search_study_guide', 'get_study_guide', 'list_group_locker_files', 'read_group_locker_file']) assert.ok(tools.some((tool) => tool.name === name), name);
     for (const name of ['begin_recording_login', 'get_recording_login_status', 'read_recording']) assert.ok(tools.some((tool) => tool.name === name), name);
