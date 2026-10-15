@@ -39,8 +39,10 @@ export interface AssignmentPage {
   id: string; title: string; kind?: string; parentId?: string; submissionId?: string;
   info: Record<string, string>; description: string; files: Array<{ name: string; url: string }>; children: AssignmentChild[];
 }
+export interface QuestionOption { text: string; selected?: boolean; feedback?: 'correct' | 'incorrect' }
+export interface Question { title: string; text: string; instruction?: string; options: QuestionOption[]; result?: string }
 export interface SubmissionPage {
-  status?: string; info: Record<string, string>; editors: Record<string, string>; specTests?: string;
+  status?: string; info: Record<string, string>; editors: Record<string, string>; specTests?: string; questions: Question[];
 }
 
 function webLabCookies(cookies: Cookie[]): Cookie[] {
@@ -150,7 +152,7 @@ export function parseAssignment(html: string, ref: CourseRef, id: string): Assig
     if (match && match[1] === id && !files.some(file => file.name === match[2])) files.push({ name: match[2]!, url: match[0] });
   });
   const descriptionNode = $('.assignment-info .assignment-text').first();
-  const description = descriptionNode.length ? plainText(descriptionNode.html() ?? '') : '';
+  const description = descriptionNode.length ? markdownText(descriptionNode.html() ?? '') : '';
   const kind = $('[data-original-title],[title]').map((_, e) => tooltip($(e))).get()
     .find(text => /question|collection of assignments/i.test(text) && !/^collection:/i.test(text));
   return { id, title, kind: children.length ? 'Collection of Assignments' : kind, parentId, submissionId, info: infoRows($),
@@ -168,7 +170,52 @@ export function parseSubmission(html: string): SubmissionPage {
   });
   const info = infoRows($);
   const specTests = clean($('.spectest-attempts').first().text()) || undefined;
-  return { status: info.State, info, editors, specTests };
+  return { status: info.State, info, editors, specTests, questions: parseQuestions($) };
+}
+
+/** Multiple-choice/question panels: stem, options, and (only once answered) the student's choice and WebLab's marking. */
+export function parseQuestions($: CheerioAPI): Question[] {
+  const questions: Question[] = [];
+  $('.question-element').each((_, panel) => {
+    const body = $(panel).find('.panel-body').first(), footer = $(panel).find('.panel-footer').first();
+    const stem = body.find('.collapse-pane').first();
+    const options: QuestionOption[] = [];
+    footer.find('label.radio, label.checkbox').each((_, label) => {
+      const input = $(label).find('input').first(), box = $(label).find('.mcq-feedback').first();
+      const text = markdownText($(label).find('.wikitext').first().html() ?? $(label).html() ?? '');
+      if (!text) return;
+      const feedback = box.hasClass('bg-success') ? 'correct' as const : box.hasClass('bg-danger') ? 'incorrect' as const : undefined;
+      options.push({ text: text.slice(0, 4000), ...(input.is('[checked]') ? { selected: true } : {}), ...(feedback ? { feedback } : {}) });
+    });
+    const result = clean(footer.children('div.text-muted').last().text()).replace(/^(true|false)\s+/i, '') || undefined;
+    questions.push({ title: clean(body.find('h3').first().text()), text: markdownText(stem.html() ?? '').slice(0, 20_000),
+      instruction: clean(footer.children('p').first().text()) || undefined, options, result });
+  });
+  return questions;
+}
+
+/** Markdown for a question; answers and marking only when the student asked for their own answers. */
+export function questionMarkdown(question: Question, withAnswers: boolean): string {
+  const lines = ['## Question', '', question.text, ''];
+  if (question.instruction) lines.push(`_${question.instruction}_`, '');
+  for (const option of question.options) {
+    const mark = withAnswers && option.selected ? 'x' : ' ';
+    const note = withAnswers && option.feedback ? ` _(${option.feedback})_` : '';
+    lines.push(`- [${mark}] ${option.text.replace(/\n+/g, ' ')}${note}`);
+  }
+  if (withAnswers && question.result) lines.push('', `**Your result:** ${question.result}`);
+  return lines.join('\n') + '\n';
+}
+
+/** Plain text that keeps code readable: <pre> becomes a fenced block, inline <code> becomes `code`. */
+export function markdownText(html: string): string {
+  const $ = load(html);
+  $('script,style,.open-control,.line-numbers-rows').remove();
+  // Blocks keep their indentation: swap them for placeholders while plainText normalises whitespace.
+  const blocks: string[] = [];
+  $('pre').each((_, pre) => { blocks.push($(pre).text().replace(/\s+$/, '').replace(/^\n+/, '')); $(pre).replaceWith(`<p>@@WEBLAB_BLOCK_${blocks.length - 1}@@</p>`); });
+  $('code').each((_, code) => { $(code).replaceWith(`\`${$('<i>').text($(code).text()).html()}\``); });
+  return plainText($.html()).replace(/@@WEBLAB_BLOCK_(\d+)@@/g, (_, index: string) => '\n```\n' + blocks[Number(index)] + '\n```\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function slugify(title: string): string {
@@ -370,9 +417,15 @@ export class WebLab {
       try {
         await mkdir(dir, { recursive: true });
         const written: string[] = [];
+        let questionText = '';
+        if (page.submissionId && /question/i.test(page.kind ?? '') && !/programming/i.test(page.kind ?? '')) {
+          await sleep(REQUEST_GAP_MS);
+          const submission = parseSubmission(await this.page(`${editionBase(ref)}/assignment/${page.id}/submission/${page.submissionId}/`));
+          questionText = submission.questions.map(question => questionMarkdown(question, options.includeMySolutions === true)).join('\n');
+        }
         const readme = [`# ${page.title}`, '', `Source: ${editionBase(ref)}/assignment/${page.id}/info`, '',
           ...(page.kind ? [`- **Type:** ${page.kind}`] : []),
-          ...Object.entries(page.info).map(([key, value]) => `- **${key}:** ${value}`), '', page.description, ''].join('\n');
+          ...Object.entries(page.info).map(([key, value]) => `- **${key}:** ${value}`), '', page.description, '', questionText].join('\n');
         await writeFile(join(dir, 'README.md'), readme); written.push('README.md');
         for (const file of page.files) {
           await sleep(REQUEST_GAP_MS);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { load } from 'cheerio';
-import { courseRef, parseAssignment, parseCourseRoot, parseCourses, parseSubmission, signedInUser } from '../src/weblab.js';
+import { courseRef, parseAssignment, parseCourseRoot, parseCourses, parseSubmission, questionMarkdown, signedInUser } from '../src/weblab.js';
 
 // Synthetic fixtures shaped like WebLab's server-rendered markup. No real student data.
 const ref = { course: 'cs0000', edition: '2026-2027' };
@@ -69,4 +69,22 @@ test('submission pages map editors to their tab labels and drop identity tooltip
 test('course references are validated before any request', () => {
   assert.deepEqual(courseRef(' CS0000 ', '2026-2027'), ref);
   for (const [c, e] of [['../x', '2026-2027'], ['cs0000', '2026'], ['cs0000', '2026-2027/../']]) assert.throws(() => courseRef(c, e), { code: 'INVALID_ID' });
+});
+
+test('multiple-choice panels yield stem and options; answers only on request', () => {
+  const html = `<table>${row('', 'Completed')}</table><div class="panel question-element"><div class="panel-body"><span class="pull-right">weight: 1.0</span><h3>Example</h3>
+    <div class="collapse-pane open"><div class="wikitext"><p>Why does <code>t</code> hold?</p><pre>Lemma t : True.\nProof.\n  exact I.\nQed.</pre></div><div class="open-control"><a>expand</a><a>collapse</a></div></div></div>
+    <div class="panel-footer"><p>Select one option</p>
+      <label class="radio"><input type="radio" name="q" value="a"><div class="mcq-feedback text-muted"><div class="wikitext"><p>Option A</p></div></div></label>
+      <label class="radio"><input type="radio" checked="checked" name="q" value="b"><div class="mcq-feedback bg-success"><div class="wikitext"><p>Option <code>B</code></p></div></div></label>
+      <div class="text-muted">true Submitted answer is correct</div></div></div>`;
+  const [question] = parseSubmission(html).questions;
+  assert.equal(question?.title, 'Example');
+  assert.equal(question?.text, 'Why does `t` hold?\n\n```\nLemma t : True.\nProof.\n  exact I.\nQed.\n```');
+  assert.deepEqual(question?.options, [{ text: 'Option A' }, { text: 'Option `B`', selected: true, feedback: 'correct' }]);
+  const plain = questionMarkdown(question!, false), answered = questionMarkdown(question!, true);
+  assert.match(plain, /- \[ \] Option `B`\n/);
+  assert.doesNotMatch(plain, /correct|\[x\]/);
+  assert.match(answered, /- \[x\] Option `B` _\(correct\)_/);
+  assert.match(answered, /Your result:\*\* Submitted answer is correct/);
 });
